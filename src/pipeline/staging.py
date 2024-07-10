@@ -58,6 +58,8 @@ class Stage:
     def prepare_mp(self):
         self.inp = None
         self.out = None
+        for s in self._stages.values():
+            s.prepare_mp()
 
     def reinit(self):
         args, ret = get_function_details(self.generate)

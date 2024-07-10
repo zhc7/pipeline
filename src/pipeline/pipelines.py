@@ -21,13 +21,20 @@ from rich.progress import Progress, BarColumn
 
 
 class Sequential(Stage):
-    def __init__(self, stages: list[Stage], retry: int = 1, **kwargs):
+    def __init__(self, stages: list[Stage | list[Stage]], retry: int = 1, **kwargs):
         super().__init__(stages=stages, retry=retry, **kwargs)
         for i, s in enumerate(stages):
-            self.add_stage(f"stage_{i}", s)
+            if isinstance(s, list):
+                for j, ss in enumerate(s):
+                    self.add_stage(f"stage_{i}_{j}", ss)
+            else:
+                self.add_stage(f"stage_{i}", s)
         self.stages = stages
         # validate stage model matches
         for i in range(len(stages) - 1):
+            if isinstance(stages[i], list):
+                # TODO: better solution, maybe not accept list at all
+                continue
             if stages[i]._mode == "increment":
                 continue
             mismatch = stages[i].out.not_fit(stages[i + 1].inp)
@@ -72,19 +79,26 @@ class SizedQueue:
         return self.queue.empty()
 
 
+def default_initiator():
+    while True:
+        yield {}
+
+
 class MPPipeline(Sequential):
     def __init__(
         self,
-        stages: list[Stage],
+        stages: list[Stage | list[Stage]],
         max_queue_size: int = 100,
         multiple: int = 1,
         max_spawn: int = 15,
+        initiator: typing.Iterable = default_initiator(),
         **kwargs,
     ):
         super().__init__(stages=stages, **kwargs)
         self.max_queue_size = max_queue_size
         self.multiple = multiple
         self.max_spawn = max_spawn
+        self.initiator = iter(initiator)
         self.ctx = mp.get_context("spawn")
         self.queues = [
             SizedQueue(self.ctx, maxsize=max_queue_size)
@@ -93,10 +107,10 @@ class MPPipeline(Sequential):
         self.processes: list[mp.Process] = []
         self.spawn_lock = mp.Lock()
         manager = self.ctx.Manager()
-        self.statuses = manager.dict()
+        self.statuses = manager.list()
         self.total = mp.Value("i", 0)
-        for s in self.stages:
-            self.statuses[s.name] = manager.list()
+        for _ in range(len(self.stages)):
+            self.statuses.append(manager.list())
         self.log_queue = SizedQueue(self.ctx)
         self.write_queue = SizedQueue(self.ctx)
 
@@ -128,8 +142,6 @@ class MPPipeline(Sequential):
         sys.stderr = WriteQueue()
         s.reinit()
         while True:
-            if is_first:
-                inp_queue.put({})
             statuses[name][index] = "IDLE"
             inp = inp_queue.get()
             if inp is None:
@@ -202,6 +214,14 @@ class MPPipeline(Sequential):
         with Live(progress, refresh_per_second=10, console=console):
             scores = [0] * len(self.stages)
             while True:
+                # put seeds
+                while self.queues[0].qsize() < self.max_queue_size:
+                    try:
+                        seed = next(self.initiator)
+                        self.queues[0].put(seed)
+                    except StopIteration:
+                        self.stop()
+
                 # redirected stdout
                 with open("sub_process_log.txt", "a") as f:
                     while not self.write_queue.empty():
@@ -216,12 +236,9 @@ class MPPipeline(Sequential):
                         else f"{1 / itps:.2f} s/it"
                     )
                     status = (
-                        " ".join(
-                            colored_status[s]
-                            for s in self.statuses[self.stages[i].name]
-                        )
+                        " ".join(colored_status[s] for s in self.statuses[i])
                         if i < len(self.stages)
-                        else (f"Total: {self.total.value} " f"Average speed: {speed}")
+                        else f"Total: {self.total.value} " f"Average speed: {speed}"
                     )
                     progress.update(tasks[i], completed=q.qsize(), status=status)
                     if i < len(self.stages):
@@ -238,42 +255,47 @@ class MPPipeline(Sequential):
                 time.sleep(0.2)
 
     def reduce(self, i):
-        alive = sum(
-            [s not in ["FAILED", "STOPPED"] for s in self.statuses[self.stages[i].name]]
-        )
+        alive = sum([s not in ["FAILED", "STOPPED"] for s in self.statuses[i]])
         if i >= 0 and alive > 1:
             self.queues[i].put(None)
 
     def spawn(self, i):
         # get id
-        name = self.stages[i].name
-        with self.spawn_lock:
-            for j, status in enumerate(self.statuses[name]):
-                if status == "STOPPED" or status == "FAILED":
-                    self.statuses[name][j] = "IDLE"
-                    break
-            else:
-                j = len(self.statuses[name])
-                if j >= self.max_spawn:
-                    return
-                self.statuses[name].append("IDLE")
+        if isinstance(self.stages[i], Stage):
+            stages = (self.stages[i],)
+        else:
+            if len(self.stages[i]) != 0:
+                # already spawned
+                return
+            stages = self.stages[i]
+        for stage in stages:
+            with self.spawn_lock:
+                for j, status in enumerate(self.statuses[i]):
+                    if status == "STOPPED" or status == "FAILED":
+                        self.statuses[i][j] = "IDLE"
+                        break
+                else:
+                    j = len(self.statuses[i])
+                    if j >= self.max_spawn:
+                        return
+                    self.statuses[i].append("IDLE")
 
-        # spawn
-        p = self.ctx.Process(
-            target=self._stage_wrapper,
-            args=(
-                self.stages[i],
-                self.queues[i],
-                self.queues[i + 1],
-                self.log_queue,
-                self.write_queue,
-                self.statuses,
-                j,
-                i == 0,
-            ),
-        )
-        p.start()
-        self.processes.append(p)
+            # spawn
+            p = self.ctx.Process(
+                target=self._stage_wrapper,
+                args=(
+                    stage,
+                    self.queues[i],
+                    self.queues[i + 1],
+                    self.log_queue,
+                    self.write_queue,
+                    self.statuses,
+                    j,
+                    i == 0,
+                ),
+            )
+            p.start()
+            self.processes.append(p)
 
     def start(self, root: str):
         """One process for each stage"""
@@ -281,8 +303,6 @@ class MPPipeline(Sequential):
         os.chdir(root)
         global_logger.log(logging.INFO, f"Pipeline started at {os.getcwd()}")
         self.prepare_mp()
-        for s in self.stages:
-            s.prepare_mp()
         for i in range(len(self.stages)):
             for j in range(self.multiple):
                 self.spawn(i)
@@ -299,6 +319,5 @@ class MPPipeline(Sequential):
         for queue in self.queues:
             for _ in range(self.multiple):
                 queue.put(None)
-        self.processes[-1].kill()
         for p in self.processes:
             p.join()
