@@ -138,6 +138,8 @@ class MPPipeline(Sequential):
             statuses[name][index] = "RUNNING"
             try:
                 out = s(inp).model_dump()
+                if "failed_" in out:
+                    continue
                 statuses[name][index] = "QUEUING"
                 out_queue.put(out)
             except:
