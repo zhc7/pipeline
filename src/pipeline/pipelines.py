@@ -123,7 +123,7 @@ class MPPipeline(Sequential):
         out_queue: SizedQueue,
         log_queue: SizedQueue,
         write_queue: SizedQueue,
-        statuses,
+        status,
         index: int,
         is_first=False,
     ):
@@ -144,20 +144,20 @@ class MPPipeline(Sequential):
         sys.stderr = WriteQueue()
         s.reinit()
         while True:
-            statuses[name][index] = "IDLE"
+            status[index] = "IDLE"
             inp = inp_queue.get()
             if inp is None:
-                statuses[name][index] = "STOPPED"
+                status[index] = "STOPPED"
                 break
-            statuses[name][index] = "RUNNING"
+            status[index] = "RUNNING"
             try:
                 out = s(inp).model_dump()
                 if "failed_" in out:
                     continue
-                statuses[name][index] = "QUEUING"
+                status[index] = "QUEUING"
                 out_queue.put(out)
             except:
-                statuses[name][index] = "FAILED"
+                status[index] = "FAILED"
                 raise
 
     def _final_saver(self, inp_queue: SizedQueue):
@@ -291,7 +291,7 @@ class MPPipeline(Sequential):
                     self.queues[i + 1],
                     self.log_queue,
                     self.write_queue,
-                    self.statuses,
+                    self.statuses[i],
                     j,
                     i == 0,
                 ),
