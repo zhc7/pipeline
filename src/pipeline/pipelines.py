@@ -43,8 +43,10 @@ class Sequential(Stage):
                     f"Stage {i}'s out does not cover {i + 1}'s input: {mismatch}"
                 )
         # set correct input output model
-        self.inp = stages[0].inp
-        self.out = stages[-1].out
+        self.inp = stages[0].inp if isinstance(stages[0], Stage) else stages[0][0].inp
+        self.out = (
+            stages[-1].out if isinstance(stages[-1], Stage) else stages[-1][0].out
+        )
 
     def generate(self, inp: EmptyData) -> Data:
         for s in self.stages:
@@ -109,7 +111,7 @@ class MPPipeline(Sequential):
         manager = self.ctx.Manager()
         self.statuses = manager.list()
         self.total = mp.Value("i", 0)
-        for _ in range(len(self.stages)):
+        for _ in range(len(stages)):
             self.statuses.append(manager.list())
         self.log_queue = SizedQueue(self.ctx)
         self.write_queue = SizedQueue(self.ctx)
@@ -319,5 +321,9 @@ class MPPipeline(Sequential):
         for queue in self.queues:
             for _ in range(self.multiple):
                 queue.put(None)
+        for p in self.processes:
+            p.join()
+
+    def wait(self):
         for p in self.processes:
             p.join()
