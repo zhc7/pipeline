@@ -1,0 +1,7 @@
+[build-system]
+requires = ["hatchling", "rich", "pydantic>=2.0.0", "multiprocess"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pipeline"
+version = "0.0.0"
