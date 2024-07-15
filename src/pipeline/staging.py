@@ -53,7 +53,6 @@ class Stage:
         self.meta_data = StageMeta(
             name=self.name, signature=get_class_signature(self.__class__)
         )
-        self.reinit()
 
     def prepare_mp(self):
         self.inp = None
@@ -62,6 +61,9 @@ class Stage:
             s.prepare_mp()
 
     def reinit(self):
+        for s in self._stages.values():
+            s.reinit()
+
         args, ret = get_function_details(self.generate)
 
         if not args:

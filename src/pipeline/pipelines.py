@@ -30,6 +30,7 @@ class Sequential(Stage):
             else:
                 self.add_stage(f"stage_{i}", s)
         self.stages = stages
+        self.reinit()
         # validate stage model matches
         for i in range(len(stages) - 1):
             if isinstance(stages[i], list):
@@ -211,6 +212,7 @@ class MPPipeline(Sequential):
             respect_handler_level=True,
         )
         listener.start()
+        global_logger.info("monitor initialized")
 
         # monitor
         with Live(progress, refresh_per_second=10, console=console):
@@ -266,7 +268,7 @@ class MPPipeline(Sequential):
         if isinstance(self.stages[i], Stage):
             stages = (self.stages[i],)
         else:
-            if len(self.stages[i]) != 0:
+            if len(self.statuses[i]) != 0:
                 # already spawned
                 return
             stages = self.stages[i]
@@ -283,6 +285,7 @@ class MPPipeline(Sequential):
                     self.statuses[i].append("IDLE")
 
             # spawn
+            global_logger.info(f"spawning {i}")
             p = self.ctx.Process(
                 target=self._stage_wrapper,
                 args=(
@@ -313,6 +316,7 @@ class MPPipeline(Sequential):
         p.start()
         self.processes.append(p)
         # monitor process
+        global_logger.info("Starting monitor")
         p = mp.Process(target=self.monitor)
         p.start()
         self.processes.append(p)
