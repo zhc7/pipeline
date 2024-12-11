@@ -5,6 +5,7 @@ import sys
 import time
 import traceback
 import typing
+from typing import Callable
 from logging.handlers import QueueHandler, QueueListener
 
 if typing.TYPE_CHECKING:
@@ -94,14 +95,14 @@ class MPPipeline(Sequential):
         max_queue_size: int = 100,
         multiple: int = 1,
         max_spawn: int = 15,
-        initiator: typing.Iterable = default_initiator(),
+        initiator: Callable[[], typing.Iterable] = default_initiator,
         **kwargs,
     ):
         super().__init__(stages=stages, **kwargs)
         self.max_queue_size = max_queue_size
         self.multiple = multiple
         self.max_spawn = max_spawn
-        self.initiator = iter(initiator)
+        self.initiator = initiator
         self.ctx = mp.get_context("spawn")
         self.queues = [
             SizedQueue(self.ctx, maxsize=max_queue_size)
@@ -213,6 +214,7 @@ class MPPipeline(Sequential):
         )
         listener.start()
         global_logger.info("monitor initialized")
+        it = iter(self.initiator())
 
         # monitor
         with Live(progress, refresh_per_second=10, console=console):
@@ -221,7 +223,7 @@ class MPPipeline(Sequential):
                 # put seeds
                 while self.queues[0].qsize() < self.max_queue_size:
                     try:
-                        seed = next(self.initiator)
+                        seed = next(it)
                         self.queues[0].put(seed)
                     except StopIteration:
                         self.stop()
