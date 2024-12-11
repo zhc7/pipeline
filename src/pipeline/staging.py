@@ -31,7 +31,7 @@ class Stage:
         name: str | None = None,
         save_interval: int = 0,
         save_location: str = ".",
-        retry: int = 3,
+        retry: int = 1,
         logger: logging.Logger = global_logger,
         **kwargs,
     ):
@@ -57,6 +57,8 @@ class Stage:
     def prepare_mp(self):
         self.inp = None
         self.out = None
+        self._generate_output_keys = None
+        self._generate_input_signature = None
         for s in self._stages.values():
             s.prepare_mp()
 
@@ -66,9 +68,17 @@ class Stage:
 
         args, ret = get_function_details(self.generate)
 
+        self._generate_input_signature = args
         if not args:
             self.inp = EmptyData
+            self._input_method = "kwargs"
+        elif len(args) == 1 and issubclass(
+            list(args.values())[0][0], Data
+        ):
+            self._input_method = "direct"
+            self.inp = list(args.values())[0][0]
         else:
+            self._input_method = "kwargs"
             self.inp = create_model(
                 self.name + "Input",
                 **args,
@@ -103,13 +113,6 @@ class Stage:
             self._mode = "increment"
             self._generate_output_keys = []
 
-        self._generate_input_signature = get_function_details(self.generate)[0]
-        if len(self._generate_input_signature) == 1 and issubclass(
-            list(self._generate_input_signature.values())[0][0], Data
-        ):
-            self._input_method = "direct"
-        else:
-            self._input_method = "kwargs"
         self.logger.info(f"Stage {self.name} initialized")
 
     def generate(self, *args, **kwargs) -> dict[str, Any] | Data | TypedDict("Any", {}):
@@ -234,10 +237,10 @@ class Stage:
 
 @functools.wraps(Stage)
 def stage(func: Optional[Callable] = None, /, **kwargs) -> Stage:
-    if "name" not in kwargs:
-        kwargs["name"] = func.__name__
     if func is None:
         return functools.partial(stage, **kwargs)
+    if "name" not in kwargs:
+        kwargs["name"] = func.__name__
 
     class _Stage(Stage):
         def __init__(self, **_kwargs):
