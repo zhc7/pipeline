@@ -179,7 +179,6 @@ class MPPipeline(Sequential):
                 except:
                     traceback.print_exc()
                 self.total.value += len(buffer)
-                self.logger.info(f"Saved {self.total.value} entries")
                 buffer.clear()
 
     def monitor(self):
@@ -226,7 +225,7 @@ class MPPipeline(Sequential):
                         seed = next(it)
                         self.queues[0].put(seed)
                     except StopIteration:
-                        self.stop()
+                        self.queues[0].put(None)
 
                 # redirected stdout
                 with open("sub_process_log.txt", "a") as f:
@@ -287,7 +286,6 @@ class MPPipeline(Sequential):
                     self.statuses[i].append("IDLE")
 
             # spawn
-            global_logger.info(f"spawning {i}")
             p = self.ctx.Process(
                 target=self._stage_wrapper,
                 args=(
