@@ -198,6 +198,13 @@ class MPPipeline(Sequential):
             "STOPPED": "[blue]ST[/blue]",
             "QUEUING": "[cyan]QU[/cyan]",
         }
+        short_colored_status = {
+            "IDLE": "[green]I[/green]",
+            "RUNNING": "[yellow]U[/yellow]",
+            "FAILED": "[red]F[/red]",
+            "STOPPED": "[blue]S[/blue]",
+            "QUEUING": "[cyan]Q[/cyan]",
+        }
 
         tasks = []
         for i, q in enumerate(self.queues):
@@ -240,11 +247,16 @@ class MPPipeline(Sequential):
                         if itps > 1 or itps == 0
                         else f"{1 / itps:.2f} s/it"
                     )
-                    status = (
-                        " ".join(colored_status[s] for s in self.statuses[i])
-                        if i < len(self.stages)
-                        else f"Total: {self.total.value} " f"Average speed: {speed}"
-                    )
+                    if i < len(self.stages):
+                        if len(self.statuses[i]) <= 30:
+                            status = " ".join(colored_status[s] for s in self.statuses[i])
+                        elif len(self.statuses[i]) <= 50:
+                            status = " ".join(short_colored_status[s] for s in self.statuses[i])
+                        else:
+                            status = "".join(short_colored_status[s] for s in self.statuses[i])
+                    else:
+                        status = f"Total: {self.total.value} " f"Average speed: {speed}"
+
                     progress.update(tasks[i], completed=q.qsize(), status=status)
                     if i < len(self.stages):
                         if q.qsize() >= self.max_queue_size / 2:
